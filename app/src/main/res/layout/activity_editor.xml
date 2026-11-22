@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bar"
+    android:orientation="vertical">
+
+    <!-- Linha 1: voltar, título, desfazer/refazer, páginas, menu -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <ImageButton
+            android:id="@+id/btnBack"
+            style="@style/BarButton"
+            android:contentDescription="Voltar"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            android:id="@+id/title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingStart="4dp"
+            android:paddingEnd="8dp"
+            android:textColor="@color/text"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <ImageButton
+            android:id="@+id/btnUndo"
+            style="@style/BarButton"
+            android:contentDescription="Desfazer"
+            android:src="@drawable/ic_undo" />
+
+        <ImageButton
+            android:id="@+id/btnRedo"
+            style="@style/BarButton"
+            android:contentDescription="Refazer"
+            android:src="@drawable/ic_redo" />
+
+        <TextView
+            android:id="@+id/pageIndicator"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/chip_bg"
+            android:drawableStart="@drawable/ic_pages"
+            android:drawablePadding="6dp"
+            android:drawableTint="@color/icon"
+            android:gravity="center"
+            android:minWidth="64dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="12dp"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
+
+        <ImageButton
+            android:id="@+id/btnMenu"
+            style="@style/BarButton"
+            android:contentDescription="Mais opções"
+            android:src="@drawable/ic_more" />
+    </LinearLayout>
+
+    <!-- Linha 2: ferramentas, cores e espessuras -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <ImageButton
+                android:id="@+id/toolPen"
+                style="@style/ToolButton"
+                android:contentDescription="Caneta"
+                android:src="@drawable/ic_pen" />
+
+            <ImageButton
+                android:id="@+id/toolHighlighter"
+                style="@style/ToolButton"
+                android:contentDescription="Marca-texto"
+                android:src="@drawable/ic_highlighter" />
+
+            <ImageButton
+                android:id="@+id/toolEraser"
+                style="@style/ToolButton"
+                android:contentDescription="Borracha"
+                android:src="@drawable/ic_eraser" />
+
+            <ImageButton
+                android:id="@+id/toolLasso"
+                style="@style/ToolButton"
+                android:contentDescription="Laço (selecionar)"
+                android:src="@drawable/ic_lasso" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="10dp"
+                android:background="@color/divider" />
+
+            <LinearLayout
+                android:id="@+id/colorRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+
+            <View
+                android:id="@+id/sizeDivider"
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="10dp"
+                android:background="@color/divider" />
+
+            <LinearLayout
+                android:id="@+id/sizeRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal" />
+
+            <TextView
+                android:id="@+id/toolHint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:textColor="@color/textSecondary"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <com.boasnotas.ui.NoteCanvasView
+            android:id="@+id/canvas"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Aparece quando há algo selecionado com o laço -->
+        <LinearLayout
+            android:id="@+id/selectionBar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/pill_bg"
+            android:elevation="6dp"
+            android:orientation="horizontal"
+            android:padding="4dp"
+            android:visibility="gone">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/selDelete"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Apagar" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/selDuplicate"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Duplicar" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/selColor"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mudar cor" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/selDone"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pronto" />
+        </LinearLayout>
+    </FrameLayout>
+</LinearLayout>

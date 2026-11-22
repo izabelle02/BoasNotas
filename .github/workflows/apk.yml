@@ -1,0 +1,51 @@
+# Monta o APK na nuvem a cada envio e publica em "Releases" com um link fixo de download.
+name: Gerar APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Testes
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Montar APK
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Renomear APK
+        run: cp app/build/outputs/apk/release/app-release.apk BoasNotas.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BoasNotas-apk
+          path: BoasNotas.apk
+
+      - name: Publicar no Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: BoasNotas 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: BoasNotas.apk
+          body: |
+            Abra este link no tablet para baixar e instalar:
+            https://github.com/${{ github.repository }}/releases/latest/download/BoasNotas.apk
