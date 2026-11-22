@@ -73,7 +73,58 @@ class Stroke(
     }
 
     fun withColor(newColor: Int): Stroke = Stroke(tool, newColor, width, points)
+
+    /** Amplia/reduz em torno do ponto (ox, oy). */
+    fun scaled(ox: Float, oy: Float, s: Float): Stroke {
+        val out = points.copyOf()
+        var i = 0
+        while (i < out.size) {
+            out[i] = ox + (out[i] - ox) * s
+            out[i + 1] = oy + (out[i + 1] - oy) * s
+            i += 3
+        }
+        return Stroke(tool, color, width * s, out)
+    }
+
+    /** Uma "impressão digital" do traço, igual sempre que o conteúdo for igual. */
+    fun contentHash(): Int = 31 * (31 * (31 * tool.ordinal + color) + width.toBits()) + points.contentHashCode()
 }
+
+/** Caixa de texto digitado. [x],[y] = canto superior esquerdo; [size] = tamanho da letra em pt. */
+data class TextBox(
+    val id: String,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val text: String,
+    val size: Float,
+    val color: Int,
+) {
+    fun translated(dx: Float, dy: Float) = copy(x = x + dx, y = y + dy)
+    fun scaled(ox: Float, oy: Float, s: Float) =
+        copy(x = ox + (x - ox) * s, y = oy + (y - oy) * s, width = width * s, size = size * s)
+}
+
+/** Imagem colada na página. [file] é o nome do arquivo na pasta assets/ do caderno. */
+data class ImageItem(
+    val id: String,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+    val file: String,
+) {
+    fun translated(dx: Float, dy: Float) = copy(x = x + dx, y = y + dy)
+    fun scaled(ox: Float, oy: Float, s: Float) =
+        copy(x = ox + (x - ox) * s, y = oy + (y - oy) * s, width = width * s, height = height * s)
+}
+
+/** Tudo o que está escrito/colado numa página (listas imutáveis). */
+data class PageContent(
+    val strokes: List<Stroke>,
+    val texts: List<TextBox>,
+    val images: List<ImageItem>,
+)
 
 class Page(
     val id: String,
@@ -84,13 +135,23 @@ class Page(
     val pdfPageIndex: Int = -1,
     /** Lista imutável: cada mudança troca a lista inteira (veja [StrokesEdit]). */
     var strokes: List<Stroke> = emptyList(),
+    var texts: List<TextBox> = emptyList(),
+    var images: List<ImageItem> = emptyList(),
 ) {
     val isPdf: Boolean get() = pdfPageIndex >= 0
 
-    fun snapshot(): Page = Page(id, template, width, height, pdfPageIndex, strokes)
+    var content: PageContent
+        get() = PageContent(strokes, texts, images)
+        set(v) {
+            strokes = v.strokes
+            texts = v.texts
+            images = v.images
+        }
+
+    fun snapshot(): Page = Page(id, template, width, height, pdfPageIndex, strokes, texts, images)
 
     /** Cópia com um id novo (para "Duplicar página"). */
-    fun duplicate(newId: String): Page = Page(newId, template, width, height, pdfPageIndex, strokes)
+    fun duplicate(newId: String): Page = Page(newId, template, width, height, pdfPageIndex, strokes, texts, images)
 
     companion object {
         const val A4_WIDTH = 595f

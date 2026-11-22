@@ -2,6 +2,13 @@ package com.boasnotas.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.net.Uri
+import android.text.InputType
+import android.view.ViewGroup
+import android.widget.EditText
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,19 +19,25 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.exifinterface.media.ExifInterface
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import com.boasnotas.R
 import com.boasnotas.data.AppSettings
 import com.boasnotas.data.NotebookMeta
+import com.boasnotas.data.HandwritingIndex
 import com.boasnotas.data.NotebookStore
+import com.boasnotas.data.SyncWorker
 import com.boasnotas.model.Notebook
 import com.boasnotas.model.PaperTemplate
+import com.boasnotas.model.TextBox
 import com.boasnotas.render.PageWorker
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.io.File
+import java.io.FileOutputStream
 
 class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
 
@@ -56,6 +69,9 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
     private var hlColorIdx = 0
     private var hlSizeIdx = 1
     private var eraserSizeIdx = 1
+    private var textSizeIdx = 1
+    private var needsSync = false
+    private lateinit var btnShapes: ImageButton
 
     private val saveAsPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri == null) return@registerForActivityResult
@@ -67,6 +83,10 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
                 Toast.makeText(this, "Não foi possível salvar: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private val pickImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) insertImage(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -85,7 +105,7 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
             finish()
             return
         }
-        worker = PageWorker(if (notebook.hasPdf) store.pdfFile(notebook.id) else null)
+        worker = PageWorker(if (notebook.hasPdf) store.pdfFile(notebook.id) else null, store.assetsDir(notebook.id))
 
         canvas = findViewById(R.id.canvas)
         btnUndo = findViewById(R.id.btnUndo)
@@ -103,19 +123,38 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
             ToolKind.HIGHLIGHTER to findViewById<ImageButton>(R.id.toolHighlighter),
             ToolKind.ERASER to findViewById<ImageButton>(R.id.toolEraser),
             ToolKind.LASSO to findViewById<ImageButton>(R.id.toolLasso),
+            ToolKind.TEXT to findViewById<ImageButton>(R.id.toolText),
         )
         toolButtons.forEach { (kind, btn) -> btn.setOnClickListener { selectTool(kind) } }
+        findViewById<View>(R.id.btnImage).setOnClickListener {
+            pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+        btnShapes = findViewById(R.id.btnShapes)
+        btnShapes.setOnClickListener {
+            canvas.shapeMode = !canvas.shapeMode
+            settings.putInt("shapeMode", if (canvas.shapeMode) 1 else 0)
+            refreshToolbar()
+            Toast.makeText(
+                this,
+                if (canvas.shapeMode) "Formas automáticas ligadas: cada traço vira forma perfeita"
+                else "Formas automáticas desligadas (segurar a caneta parada no fim ainda funciona)",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
 
         penColorIdx = settings.getInt("penColor", 0).coerceIn(0, Palette.pen.size - 1)
         penSizeIdx = settings.getInt("penSize", 1).coerceIn(0, 2)
         hlColorIdx = settings.getInt("hlColor", 0).coerceIn(0, Palette.highlighter.size - 1)
         hlSizeIdx = settings.getInt("hlSize", 1).coerceIn(0, 2)
         eraserSizeIdx = settings.getInt("eraserSize", 1).coerceIn(0, 2)
+        textSizeIdx = settings.getInt("textSize", 1).coerceIn(0, 2)
         applyToolSettings()
+        canvas.shapeMode = settings.getInt("shapeMode", 0) == 1
 
         canvas.listener = this
-        val startPage = getPreferences(Context.MODE_PRIVATE).getInt("page_${notebook.id}", 0)
-        canvas.setup(notebook, worker, settings, startPage)
+        val startPage = intent.getIntExtra(EXTRA_PAGE, -1).takeIf { it >= 0 }
+            ?: getPreferences(Context.MODE_PRIVATE).getInt("page_${notebook.id}", 0)
+        canvas.setup(notebook, worker, settings, startPage, store.assetsDir(notebook.id))
         val lastTool = ToolKind.entries.getOrElse(settings.getInt("tool", 0)) { ToolKind.PEN }
         selectTool(if (lastTool == ToolKind.LASSO) ToolKind.PEN else lastTool)
 
@@ -165,8 +204,15 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
                 addSizes(eraserSizeIdx, 0xFF9AA0A6.toInt()) { eraserSizeIdx = it; settings.putInt("eraserSize", it) }
                 toolHint.text = if (settings.eraseWholeStroke) "Apaga o traço inteiro" else "Apaga só onde passa"
             }
-            ToolKind.LASSO -> toolHint.text = "Circule o que quer selecionar; depois arraste para mover"
+            ToolKind.LASSO -> toolHint.text = "Circule ou toque no que quer selecionar. Arraste para mover; a bolinha do canto aumenta/diminui"
+            ToolKind.TEXT -> {
+                addColors(Palette.pen, penColorIdx) { penColorIdx = it; settings.putInt("penColor", it) }
+                addSizes(textSizeIdx, Palette.pen[penColorIdx]) { textSizeIdx = it; settings.putInt("textSize", it) }
+                toolHint.text = "Toque na página para escrever (ou num texto para editar)"
+            }
         }
+        btnShapes.visibility = if (shown == ToolKind.PEN || shown == ToolKind.HIGHLIGHTER) View.VISIBLE else View.GONE
+        btnShapes.isSelected = canvas.shapeMode
         val hasColors = colorRow.childCount > 0
         colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         sizeDivider.visibility = if (hasColors) View.VISIBLE else View.GONE
@@ -209,6 +255,7 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
         canvas.eraserRadius = Palette.eraserRadii[eraserSizeIdx]
     }
 
+
     private fun pickSelectionColor() {
         val names = arrayOf("Preto", "Azul", "Vermelho", "Verde", "Roxo", "Laranja", "Azul-petróleo", "Marrom")
         MaterialAlertDialogBuilder(this)
@@ -225,6 +272,7 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
 
     override fun onContentChanged() {
         dirty = true
+        needsSync = true
         thumbDirty = true
         notebook.modified = System.currentTimeMillis()
         handler.removeCallbacks(saveRunnable)
@@ -242,6 +290,84 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
     override fun onToolChangedByPen(tool: ToolKind) = refreshToolbar()
 
     override fun onPenButtonHold(held: Boolean) = refreshToolbar()
+
+    override fun onTextRequest(pageIndex: Int, x: Float, y: Float, existing: TextBox?) {
+        val page = notebook.pages.getOrNull(pageIndex) ?: return
+        val input = EditText(this).apply {
+            setText(existing?.text ?: "")
+            hint = "Digite aqui"
+            minLines = 3
+            gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setSelection(text.length)
+        }
+        val frame = LinearLayout(this).apply {
+            setPadding(dpi(22), dpi(8), dpi(22), 0)
+            addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val b = MaterialAlertDialogBuilder(this)
+            .setTitle(if (existing == null) "Novo texto" else "Editar texto")
+            .setView(frame)
+            .setPositiveButton("OK") { _, _ ->
+                val text = input.text.toString().trimEnd()
+                if (text.isBlank()) {
+                    if (existing != null) canvas.putText(pageIndex, existing, null)
+                    return@setPositiveButton
+                }
+                val box = existing?.copy(text = text) ?: run {
+                    val left = x.coerceAtMost(page.width - 150f).coerceAtLeast(10f)
+                    val size = Palette.textSizes[textSizeIdx]
+                    TextBox(
+                        NotebookStore.newId(), left, (y - size * 0.6f).coerceAtLeast(0f),
+                        (page.width - left - 30f).coerceAtLeast(120f), text, size, Palette.pen[penColorIdx],
+                    )
+                }
+                canvas.putText(pageIndex, existing, box)
+            }
+            .setNegativeButton("Cancelar", null)
+        if (existing != null) b.setNeutralButton("Apagar") { _, _ -> canvas.putText(pageIndex, existing, null) }
+        val dialog = b.show()
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        input.requestFocus()
+    }
+
+    /** Copia a foto para dentro do caderno (reduzida e na posição certa) e cola na página. */
+    private fun insertImage(uri: Uri) {
+        val dir = store.assetsDir(notebook.id)
+        val isPng = contentResolver.getType(uri) == "image/png"
+        io.execute {
+            val result = runCatching {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 2048) sample *= 2
+                var bmp = contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+                } ?: throw IllegalStateException("Imagem não reconhecida")
+                val rotation = contentResolver.openInputStream(uri)?.use {
+                    ExifInterface(it).rotationDegrees
+                } ?: 0
+                if (rotation != 0) {
+                    val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                    bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+                }
+                dir.mkdirs()
+                val name = NotebookStore.newId() + if (isPng) ".png" else ".jpg"
+                FileOutputStream(File(dir, name)).use {
+                    bmp.compress(if (isPng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 90, it)
+                }
+                Triple(name, bmp.width, bmp.height)
+            }
+            runOnUiThread {
+                result.onSuccess { (name, w, h) ->
+                    canvas.insertImage(name, w, h)
+                    refreshToolbar()
+                }
+                result.onFailure { Toast.makeText(this, "Não foi possível colar a imagem: ${it.message}", Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
 
     override fun onSelectionChanged(hasSelection: Boolean) {
         selectionBar.visibility = if (hasSelection) View.VISIBLE else View.GONE
@@ -383,19 +509,38 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
             getPreferences(Context.MODE_PRIVATE).edit().putInt("page_${notebook.id}", canvas.currentPageIndex).apply()
         }
         save()
+        if (::notebook.isInitialized && needsSync) {
+            needsSync = false
+            val id = notebook.id
+            val app = applicationContext
+            // depois que o salvamento acabar (a fila é a mesma): busca e Google Drive
+            io.execute {
+                HandwritingIndex.requestIndex(app, id)
+                SyncWorker.schedule(app, id)
+            }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(saveRunnable)
         worker?.close()
+        if (::canvas.isInitialized && isFinishing) {
+            // apaga imagens que não estão mais em nenhuma página
+            val used = canvas.usedImageFiles()
+            val dir = store.assetsDir(notebook.id)
+            io.execute { dir.listFiles()?.filter { it.name !in used }?.forEach { it.delete() } }
+        }
     }
 
     companion object {
         const val EXTRA_ID = "notebook_id"
+        const val EXTRA_PAGE = "page"
 
-        fun open(context: Context, id: String) {
-            context.startActivity(Intent(context, EditorActivity::class.java).putExtra(EXTRA_ID, id))
+        fun open(context: Context, id: String, page: Int = -1) {
+            context.startActivity(
+                Intent(context, EditorActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_PAGE, page),
+            )
         }
     }
 }

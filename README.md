@@ -33,6 +33,12 @@ instalar por cima: **os cadernos continuam lá**.
 | **Páginas** | Rolagem contínua, grade de miniaturas, nova página, duplicar, apagar. |
 | **PDF** | Importe um PDF (botão no topo, ou "Compartilhar → BoasNotas" em qualquer app) e escreva por cima. |
 | **Exportar** | Gera um PDF do caderno para compartilhar (WhatsApp, Drive, e-mail…) ou salvar no tablet. |
+| **Texto** | Ferramenta **T**: toque na página e digite. Toque num texto para editar ou apagar. 3 tamanhos, 8 cores. |
+| **Imagens** | Botão de imagem: escolha uma foto da galeria; ela entra selecionada para mover e redimensionar. |
+| **Formas automáticas** | Desenhe e **segure a caneta parada** meio segundo: vira linha, círculo, retângulo, triângulo ou polígono perfeito. Ou ligue o botão de formas para todo traço virar forma. |
+| **Redimensionar** | Com o laço, arraste a bolinha do canto da seleção para aumentar/diminuir (traços, textos e imagens). |
+| **Busca na letra** | Lupa na tela inicial: procura nos títulos, nas caixas de texto e na sua **letra** (reconhecida no próprio tablet). |
+| **Google Drive** | Salva sozinho cada caderno como **PDF com a sua letra** na pasta "BoasNotas" do Drive, mais uma cópia de segurança para restaurar em outro tablet. |
 | **Salvamento** | Automático, enquanto você escreve. |
 
 ### Botão da S Pen
@@ -47,6 +53,34 @@ Em **⋮ → Configurações → Botão da S Pen**:
 > "Comandos aéreos" da Samsung, você pode desligar isso em **Configurações do tablet → Recursos
 > avançados → S Pen → Comandos aéreos**.
 
+## Ligar o Google Drive (uma vez só)
+
+O Google só deixa um app mexer no seu Drive se ele estiver registrado no **Google Cloud**.
+É gratuito e leva uns 10 minutos. Dá para fazer no navegador do próprio tablet:
+
+1. Entre em **https://console.cloud.google.com** com a sua conta Google e aceite os termos.
+2. No topo, clique em **Selecionar projeto → Novo projeto**. Nome: `BoasNotas` → **Criar**.
+   Confira se o projeto `BoasNotas` está selecionado no topo.
+3. Menu ☰ → **APIs e serviços → Biblioteca** → procure **Google Drive API** → **Ativar**.
+4. Menu ☰ → **APIs e serviços → Tela de permissão OAuth** (ou "Google Auth Platform") → **Começar**:
+   - Nome do app: `BoasNotas`; e-mail de suporte: o seu.
+   - Público: **Externo**. Dados de contato: o seu e-mail. Aceite e **Criar**.
+   - Em **Público**, clique em **Publicar app** (o app só pede acesso aos arquivos que ele mesmo cria,
+     então não precisa de verificação do Google).
+5. Menu ☰ → **APIs e serviços → Credenciais → Criar credenciais → ID do cliente OAuth**:
+   - Tipo de aplicativo: **Android**
+   - Nome do pacote: `com.boasnotas`
+   - Impressão digital do certificado SHA-1:
+     `89:04:C6:C0:8C:C0:D6:F5:30:5F:8D:B6:92:64:62:8F:F0:AF:04:E3`
+   - **Criar**.
+6. No tablet, abra o BoasNotas → toque na **nuvem ☁** → **Conectar** → escolha a sua conta → **Permitir**.
+
+Pronto: cada caderno vai para a pasta **BoasNotas** do Drive como PDF alguns segundos depois que você
+sai dele (precisa de internet; sem internet, ele envia quando a conexão voltar). Na nuvem ☁ também
+dá para **Salvar tudo agora** e **Restaurar do Drive** (traz para o tablet cadernos salvos de outro aparelho).
+
+> Apagar um caderno no app **não** apaga os arquivos dele no Drive.
+
 ## Para quem for mexer no código
 
 App Android nativo em **Kotlin**, sem bibliotecas de desenho de terceiros.
@@ -54,7 +88,7 @@ App Android nativo em **Kotlin**, sem bibliotecas de desenho de terceiros.
 ```
 app/src/main/java/com/boasnotas/
 ├── model/      dados puros (traço, página, caderno), borracha/laço, desfazer, formato do arquivo
-├── data/       onde os cadernos são salvos; configurações
+├── data/       onde os cadernos são salvos; configurações; Google Drive; busca na letra
 ├── render/     desenho do traço com pressão, papel, PDF (fundo e exportação)
 └── ui/         telas: estante (LibraryActivity), caderno (EditorActivity), a folha (NoteCanvasView)
 ```

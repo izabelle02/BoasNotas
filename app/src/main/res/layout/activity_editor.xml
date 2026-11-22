@@ -110,6 +110,24 @@
                 android:contentDescription="Laço (selecionar)"
                 android:src="@drawable/ic_lasso" />
 
+            <ImageButton
+                android:id="@+id/toolText"
+                style="@style/ToolButton"
+                android:contentDescription="Texto"
+                android:src="@drawable/ic_text" />
+
+            <ImageButton
+                android:id="@+id/btnImage"
+                style="@style/ToolButton"
+                android:contentDescription="Colar imagem"
+                android:src="@drawable/ic_image" />
+
+            <ImageButton
+                android:id="@+id/btnShapes"
+                style="@style/ToolButton"
+                android:contentDescription="Formas automáticas"
+                android:src="@drawable/ic_shapes" />
+
             <View
                 android:layout_width="1dp"
                 android:layout_height="28dp"

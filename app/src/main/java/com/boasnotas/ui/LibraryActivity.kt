@@ -19,6 +19,7 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -26,9 +27,15 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.boasnotas.R
 import com.boasnotas.data.AppSettings
+import com.boasnotas.data.DriveSync
+import com.boasnotas.data.HandwritingIndex
 import com.boasnotas.data.NotebookInfo
 import com.boasnotas.data.NotebookStore
+import com.boasnotas.data.SyncWorker
 import com.boasnotas.model.PaperTemplate
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlin.math.max
 
@@ -43,6 +50,20 @@ class LibraryActivity : AppCompatActivity() {
 
     private val pickPdf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) importPdf(uri)
+    }
+
+    // Volta da tela do Google onde você escolhe a conta e permite o acesso ao Drive.
+    private val driveConsent = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        if (res.resultCode == RESULT_OK) {
+            try {
+                val r = Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(res.data)
+                if (r.accessToken != null) onDriveConnected()
+            } catch (e: Exception) {
+                driveError(e)
+            }
+        } else {
+            Toast.makeText(this, "Conexão com o Google Drive cancelada", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +82,9 @@ class LibraryActivity : AppCompatActivity() {
         findViewById<View>(R.id.fab).setOnClickListener { newNotebookDialog() }
         findViewById<View>(R.id.btnImport).setOnClickListener { pickPdf.launch(arrayOf("application/pdf")) }
         findViewById<View>(R.id.btnSettings).setOnClickListener { SettingsDialog.show(this, AppSettings(this)) }
+        findViewById<View>(R.id.btnSearch).setOnClickListener { startActivity(Intent(this, SearchActivity::class.java)) }
+        findViewById<View>(R.id.btnDrive).setOnClickListener { driveDialog() }
+        HandwritingIndex.prepare(this)
 
         if (savedInstanceState == null) handleIncomingPdf(intent)
     }
@@ -191,6 +215,105 @@ class LibraryActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    // ---------------- Google Drive ----------------
+
+    private fun driveDialog() {
+        val settings = AppSettings(this)
+        val b = MaterialAlertDialogBuilder(this).setTitle("Google Drive")
+        if (!settings.driveEnabled) {
+            b.setMessage(
+                "Salve todos os cadernos automaticamente no seu Google Drive, na pasta \"BoasNotas\":\n\n" +
+                    "• um PDF de cada caderno, com a sua letra do jeitinho que está na tela;\n" +
+                    "• uma cópia de segurança, para restaurar os cadernos se trocar de tablet.\n\n" +
+                    "O app só consegue ver os arquivos que ele mesmo criou no seu Drive.",
+            )
+            b.setPositiveButton("Conectar") { _, _ -> connectDrive() }
+            b.setNegativeButton("Agora não", null)
+        } else {
+            val status = settings.driveStatus.ifEmpty { "Conectado. Os cadernos são salvos alguns segundos depois que você sai deles." }
+            b.setMessage(status)
+            b.setPositiveButton("Salvar tudo agora") { _, _ ->
+                SyncWorker.scheduleAll(this)
+                Toast.makeText(this, "Enviando os cadernos para o Drive…", Toast.LENGTH_SHORT).show()
+            }
+            b.setNeutralButton("Restaurar do Drive") { _, _ -> restoreFromDrive() }
+            b.setNegativeButton("Desconectar") { _, _ ->
+                settings.driveEnabled = false
+                settings.driveStatus = ""
+                Toast.makeText(this, "O app não vai mais salvar no Drive (os arquivos que já estão lá continuam).", Toast.LENGTH_LONG).show()
+            }
+        }
+        b.show()
+    }
+
+    private fun connectDrive() {
+        Identity.getAuthorizationClient(this).authorize(DriveSync.authRequest())
+            .addOnSuccessListener { r ->
+                val pending = r.pendingIntent
+                if (r.hasResolution() && pending != null) {
+                    driveConsent.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+                } else {
+                    onDriveConnected()
+                }
+            }
+            .addOnFailureListener { driveError(it) }
+    }
+
+    private fun onDriveConnected() {
+        val settings = AppSettings(this)
+        settings.driveEnabled = true
+        settings.driveStatus = "Conectado. Enviando os cadernos…"
+        SyncWorker.scheduleAll(this)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Google Drive conectado ✓")
+            .setMessage(
+                "Os cadernos estão sendo enviados agora para a pasta \"BoasNotas\" do seu Drive. " +
+                    "Daqui pra frente, cada caderno é salvo sozinho alguns segundos depois que você sai dele.\n\n" +
+                    "Quer trazer para este tablet cadernos que já estão no Drive (de outro aparelho)?",
+            )
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Restaurar do Drive") { _, _ -> restoreFromDrive() }
+            .show()
+    }
+
+    private fun restoreFromDrive() {
+        val progress = MaterialAlertDialogBuilder(this)
+            .setTitle("Procurando cadernos no Drive…")
+            .setCancelable(false)
+            .show()
+        val app = applicationContext
+        Thread {
+            val result = runCatching { DriveSync.restoreMissing(app) }
+            runOnUiThread {
+                progress.dismiss()
+                result.onSuccess { n ->
+                    Toast.makeText(
+                        this,
+                        if (n == 0) "Nenhum caderno novo no Drive: todos já estão neste tablet." else "$n caderno(s) restaurado(s)",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    refresh()
+                }
+                result.onFailure { driveError(it) }
+            }
+        }.start()
+    }
+
+    private fun driveError(e: Throwable) {
+        val code = (e as? ApiException)?.statusCode
+        val msg = if (code == CommonStatusCodes.DEVELOPER_ERROR || e.message?.contains("10:") == true) {
+            "O app ainda não está registrado no Google para usar o Drive. Isso se faz uma vez só, " +
+                "no Google Cloud (veja \"Ligar o Google Drive\" no README do projeto no GitHub)."
+        } else {
+            e.message ?: e.toString()
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Não foi possível usar o Google Drive")
+            .setMessage(msg)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     // ---------------- Opções do caderno (toque longo) ----------------

@@ -68,6 +68,12 @@ object SettingsDialog {
         box.addView(switch("Desenhar com o dedo", settings.fingerDraws) { settings.fingerDraws = it })
         box.addView(note("Desligado: só a caneta escreve; o dedo rola e dá zoom (a palma da mão é ignorada)."))
         box.addView(switch("Toque com 2 dedos desfaz (3 dedos refaz)", settings.tapGestures) { settings.tapGestures = it })
+        box.addView(switch("Segurar a caneta parada vira forma", settings.holdForShape) { settings.holdForShape = it })
+        box.addView(note("Desenhe um círculo, retângulo, triângulo ou linha e segure a ponta parada por meio segundo: vira uma forma perfeita."))
+
+        box.addView(header("Busca"))
+        box.addView(switch("Reconhecer a minha letra (para buscar)", settings.handwritingSearch) { settings.handwritingSearch = it })
+        box.addView(note("Na primeira vez o tablet baixa o reconhecimento de português (~20 MB). Tudo é feito no próprio tablet."))
 
         MaterialAlertDialogBuilder(activity)
             .setTitle("Configurações")

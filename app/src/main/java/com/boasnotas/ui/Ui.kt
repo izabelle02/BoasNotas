@@ -29,6 +29,8 @@ object Palette {
     val penWidths = floatArrayOf(1.1f, 2.0f, 3.4f)
     val highlighterWidths = floatArrayOf(8f, 14f, 22f)
     val eraserRadii = floatArrayOf(4f, 9f, 18f)
+    /** Tamanho da letra das caixas de texto (pt). */
+    val textSizes = floatArrayOf(11f, 15f, 22f)
 }
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density

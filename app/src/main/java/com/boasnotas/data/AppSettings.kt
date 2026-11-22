@@ -35,6 +35,29 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("tapGestures", true)
         set(v) = prefs.edit().putBoolean("tapGestures", v).apply()
 
+    /** Segurar a caneta parada no fim do traço transforma o rabisco em forma perfeita. */
+    var holdForShape: Boolean
+        get() = prefs.getBoolean("holdForShape", true)
+        set(v) = prefs.edit().putBoolean("holdForShape", v).apply()
+
+    /** Reconhecer a letra para poder buscar nos cadernos. */
+    var handwritingSearch: Boolean
+        get() = prefs.getBoolean("handwritingSearch", true)
+        set(v) = prefs.edit().putBoolean("handwritingSearch", v).apply()
+
+    /** Salvar automaticamente no Google Drive. */
+    var driveEnabled: Boolean
+        get() = prefs.getBoolean("driveEnabled", false)
+        set(v) = prefs.edit().putBoolean("driveEnabled", v).apply()
+
+    /** Última mensagem do salvamento no Drive (ex.: "Salvo às 14:32" ou o erro). */
+    var driveStatus: String
+        get() = prefs.getString("driveStatus", "") ?: ""
+        set(v) = prefs.edit().putString("driveStatus", v).apply()
+
+    fun getString(key: String): String? = prefs.getString(key, null)
+    fun putString(key: String, v: String?) = prefs.edit().putString(key, v).apply()
+
     // Última ferramenta usada (para abrir o caderno do jeito que você deixou).
     fun getInt(key: String, def: Int) = prefs.getInt(key, def)
     fun putInt(key: String, v: Int) = prefs.edit().putInt(key, v).apply()

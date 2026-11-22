@@ -25,7 +25,7 @@ import kotlin.math.roundToInt
  * exportar. O PdfRenderer do Android não pode ser usado por duas threads ao mesmo tempo,
  * por isso tudo passa por aqui, em fila.
  */
-class PageWorker(pdfFile: File?) {
+class PageWorker(pdfFile: File?, private val assetsDir: File? = null) {
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "boasnotas-render") }
     private val main = Handler(Looper.getMainLooper())
     private var fd: ParcelFileDescriptor? = null
@@ -116,6 +116,15 @@ class PageWorker(pdfFile: File?) {
         }
         c.save()
         c.clipRect(0f, 0f, page.width, page.height)
+        if (assetsDir != null) {
+            for (im in page.images) {
+                val px = (max(im.width, im.height) * pixelScale).toInt().coerceIn(64, 2400)
+                val bmp = ItemRenderer.decode(File(assetsDir, im.file), px)
+                ItemRenderer.drawImage(c, im, bmp, paint)
+                bmp?.recycle()
+            }
+        }
+        for (t in page.texts) ItemRenderer.drawText(c, t, useCache = false)
         StrokeRenderer.drawStrokes(c, page.strokes, paint, null)
         c.restore()
     }
@@ -132,26 +141,34 @@ class PageWorker(pdfFile: File?) {
     fun exportPdf(pages: List<Page>, out: File, callback: (Throwable?) -> Unit) {
         val snaps = pages.map { it.snapshot() }
         execute {
-            var error: Throwable? = null
-            val doc = PdfDocument()
-            try {
-                snaps.forEachIndexed { i, page ->
-                    val info = PdfDocument.PageInfo.Builder(
-                        page.width.roundToInt(), page.height.roundToInt(), i + 1,
-                    ).create()
-                    val p = doc.startPage(info)
-                    // Fundo de PDF em 2,5x (180 dpi) para o texto original continuar legível.
-                    drawPageOffscreen(p.canvas, page, 2.5f)
-                    doc.finishPage(p)
-                }
-                out.parentFile?.mkdirs()
-                FileOutputStream(out).use { doc.writeTo(it) }
-            } catch (e: Throwable) {
-                error = e
-            } finally {
-                doc.close()
-            }
+            val error = runCatching { writePdf(snaps, out) }.exceptionOrNull()
             onMain { callback(error) }
+        }
+    }
+
+    /** Roda [task] na thread de desenho e espera o resultado. Não chame da thread principal. */
+    fun <T> call(task: () -> T): T = executor.submit(java.util.concurrent.Callable { task() }).get()
+
+    /** Exporta para PDF esperando terminar (para o salvamento no Google Drive, em segundo plano). */
+    fun exportPdfBlocking(pages: List<Page>, out: File) {
+        val snaps = pages.map { it.snapshot() }
+        call { writePdf(snaps, out) }
+    }
+
+    private fun writePdf(snaps: List<Page>, out: File) {
+        val doc = PdfDocument()
+        try {
+            snaps.forEachIndexed { i, page ->
+                val info = PdfDocument.PageInfo.Builder(page.width.roundToInt(), page.height.roundToInt(), i + 1).create()
+                val p = doc.startPage(info)
+                // Fundo de PDF em 2,5x (180 dpi) para o texto original continuar legível.
+                drawPageOffscreen(p.canvas, page, 2.5f)
+                doc.finishPage(p)
+            }
+            out.parentFile?.mkdirs()
+            FileOutputStream(out).use { doc.writeTo(it) }
+        } finally {
+            doc.close()
         }
     }
 

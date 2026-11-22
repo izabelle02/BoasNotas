@@ -12,7 +12,7 @@ import java.io.OutputStream
  */
 object NotebookCodec {
     private const val MAGIC = 0x424E5431 // "BNT1"
-    private const val VERSION = 1
+    private const val VERSION = 2
 
     fun write(out: OutputStream, pages: List<Page>) {
         val o = DataOutputStream(out.buffered())
@@ -34,8 +34,39 @@ object NotebookCodec {
                 o.writeInt(s.points.size)
                 for (v in s.points) o.writeFloat(v)
             }
+            // versão 2: caixas de texto e imagens
+            val texts = page.texts
+            o.writeInt(texts.size)
+            for (t in texts) {
+                o.writeUTF(t.id)
+                o.writeFloat(t.x); o.writeFloat(t.y); o.writeFloat(t.width)
+                writeLongString(o, t.text)
+                o.writeFloat(t.size)
+                o.writeInt(t.color)
+            }
+            val images = page.images
+            o.writeInt(images.size)
+            for (im in images) {
+                o.writeUTF(im.id)
+                o.writeFloat(im.x); o.writeFloat(im.y); o.writeFloat(im.width); o.writeFloat(im.height)
+                o.writeUTF(im.file)
+            }
         }
         o.flush()
+    }
+
+    private fun writeLongString(o: DataOutputStream, s: String) {
+        val bytes = s.toByteArray(Charsets.UTF_8)
+        o.writeInt(bytes.size)
+        o.write(bytes)
+    }
+
+    private fun readLongString(i: DataInputStream): String {
+        val n = i.readInt()
+        if (n < 0 || n > 50_000_000) throw IOException("Texto inválido no caderno")
+        val bytes = ByteArray(n)
+        i.readFully(bytes)
+        return String(bytes, Charsets.UTF_8)
     }
 
     fun read(input: InputStream): MutableList<Page> {
@@ -62,7 +93,22 @@ object NotebookCodec {
                 for (k in 0 until n) pts[k] = i.readFloat()
                 strokes.add(Stroke(tool, color, width, pts))
             }
-            pages.add(Page(id, template, w, h, pdfIndex, strokes))
+            val texts = ArrayList<TextBox>()
+            val images = ArrayList<ImageItem>()
+            if (version >= 2) {
+                repeat(i.readInt()) {
+                    val tid = i.readUTF()
+                    val x = i.readFloat(); val y = i.readFloat(); val tw = i.readFloat()
+                    val text = readLongString(i)
+                    texts.add(TextBox(tid, x, y, tw, text, i.readFloat(), i.readInt()))
+                }
+                repeat(i.readInt()) {
+                    val iid = i.readUTF()
+                    val x = i.readFloat(); val y = i.readFloat(); val iw = i.readFloat(); val ih = i.readFloat()
+                    images.add(ImageItem(iid, x, y, iw, ih, i.readUTF()))
+                }
+            }
+            pages.add(Page(id, template, w, h, pdfIndex, strokes, texts, images))
         }
         return pages
     }

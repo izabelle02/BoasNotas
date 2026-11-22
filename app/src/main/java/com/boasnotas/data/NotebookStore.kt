@@ -41,6 +41,10 @@ class NotebookStore(context: Context) {
     private val root = File(appContext.filesDir, "notebooks").apply { mkdirs() }
 
     private fun dir(id: String) = File(root, id)
+    fun notebookDir(id: String) = dir(id)
+    fun assetsDir(id: String) = File(dir(id), "assets")
+    fun exists(id: String) = File(dir(id), "meta.json").exists()
+    val rootDir: File get() = root
     fun pdfFile(id: String) = File(dir(id), "source.pdf")
     fun thumbFile(id: String) = File(dir(id), "thumb.png")
 

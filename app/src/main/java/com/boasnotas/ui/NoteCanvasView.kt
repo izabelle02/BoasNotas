@@ -22,30 +22,37 @@ import com.boasnotas.data.AppSettings
 import com.boasnotas.data.NotebookStore
 import com.boasnotas.data.PenButtonMode
 import com.boasnotas.model.CompositeEdit
+import com.boasnotas.model.ContentEdit
 import com.boasnotas.model.Edit
 import com.boasnotas.model.FloatList
 import com.boasnotas.model.Geometry
 import com.boasnotas.model.History
+import com.boasnotas.model.ImageItem
 import com.boasnotas.model.Notebook
 import com.boasnotas.model.Page
+import com.boasnotas.model.PageContent
 import com.boasnotas.model.PageInsertEdit
 import com.boasnotas.model.PageRemoveEdit
 import com.boasnotas.model.PaperTemplate
 import com.boasnotas.model.Stroke
 import com.boasnotas.model.StrokesEdit
+import com.boasnotas.model.ShapeRecognizer
 import com.boasnotas.model.TemplateEdit
+import com.boasnotas.model.TextBox
 import com.boasnotas.model.Tool
+import com.boasnotas.render.ItemRenderer
 import com.boasnotas.render.PageWorker
 import com.boasnotas.render.PaperRenderer
 import com.boasnotas.render.PenPathBuilder
 import com.boasnotas.render.StrokeRenderer
+import java.io.File
 import java.util.IdentityHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
-enum class ToolKind { PEN, HIGHLIGHTER, ERASER, LASSO }
+enum class ToolKind { PEN, HIGHLIGHTER, ERASER, LASSO, TEXT }
 
 /**
  * A folha onde se escreve. Mostra as páginas uma embaixo da outra (rolagem contínua).
@@ -72,6 +79,8 @@ class NoteCanvasView @JvmOverloads constructor(
         /** O botão da caneta está sendo segurado (modo "segurar"): a borracha está ativa. */
         fun onPenButtonHold(held: Boolean)
         fun onSelectionChanged(hasSelection: Boolean)
+        /** Toque com a ferramenta Texto: criar ([existing] == null) ou editar uma caixa de texto. */
+        fun onTextRequest(pageIndex: Int, x: Float, y: Float, existing: TextBox?)
     }
 
     var listener: Listener? = null
@@ -81,6 +90,7 @@ class NoteCanvasView @JvmOverloads constructor(
     private var worker: PageWorker? = null
     private lateinit var settings: AppSettings
     private var startPage = 0
+    private var assetsDir: File? = null
 
     // ---------- Ferramentas ----------
     var tool: ToolKind = ToolKind.PEN
@@ -99,6 +109,8 @@ class NoteCanvasView @JvmOverloads constructor(
     var highlighterWidth = 14f
     /** Raio da borracha, em pontos da página. */
     var eraserRadius = 8f
+    /** Formas automáticas: todo traço vira linha/círculo/retângulo… quando possível. */
+    var shapeMode = false
 
     // ---------- Camadas ----------
     private val content = object : View(context) {
@@ -143,11 +155,12 @@ class NoteCanvasView @JvmOverloads constructor(
         isFocusableInTouchMode = true
     }
 
-    fun setup(nb: Notebook, worker: PageWorker?, settings: AppSettings, startPage: Int) {
+    fun setup(nb: Notebook, worker: PageWorker?, settings: AppSettings, startPage: Int, assetsDir: File?) {
         this.notebook = nb
         this.worker = worker
         this.settings = settings
         this.startPage = startPage
+        this.assetsDir = assetsDir
         relayout()
     }
 
@@ -275,7 +288,7 @@ class NoteCanvasView @JvmOverloads constructor(
         val viewLeft = toDocX(0f)
         val viewRight = toDocX(width.toFloat())
         var visibleCount = 0
-        val skip: Set<Stroke>? = selection?.set
+        val sel = selection
         for (i in pages.indices) {
             val page = pages[i]
             val top = pageTop[i]
@@ -293,13 +306,46 @@ class NoteCanvasView @JvmOverloads constructor(
             visibleTmp[1] = viewTop - top
             visibleTmp[2] = viewRight - pageLeft[i]
             visibleTmp[3] = viewBottom - top
-            StrokeRenderer.drawStrokes(
-                canvas, page.strokes, paint, pathCache, visibleTmp,
-                if (selection?.page === page) skip else null,
-            )
+            val selHere = if (sel?.page === page) sel else null
+            for (im in page.images) {
+                if (selHere != null && selHere.imageSet.contains(im)) continue
+                ItemRenderer.drawImage(canvas, im, imageBitmap(im), bitmapPaint)
+            }
+            for (t in page.texts) {
+                if (selHere != null && selHere.textSet.contains(t)) continue
+                ItemRenderer.drawText(canvas, t)
+            }
+            StrokeRenderer.drawStrokes(canvas, page.strokes, paint, pathCache, visibleTmp, selHere?.set)
             canvas.restore()
         }
         maxPdfCache = max(4, visibleCount + 2)
+    }
+
+    // ---- Imagens coladas: lidas do disco em segundo plano e guardadas na memória ----
+    private val imageCache = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?) = size > 12
+    }
+    private val imagePending = HashSet<String>()
+
+    private fun imageBitmap(im: ImageItem): Bitmap? {
+        imageCache[im.file]?.let { return it }
+        val dir = assetsDir ?: return null
+        val w = worker ?: return null
+        if (imagePending.add(im.file)) {
+            val file = File(dir, im.file)
+            w.execute {
+                val bmp = ItemRenderer.decode(file, 1600)
+                w.onMain {
+                    imagePending.remove(im.file)
+                    if (bmp != null) {
+                        imageCache[im.file] = bmp
+                        content.invalidate()
+                        overlay.invalidate()
+                    }
+                }
+            }
+        }
+        return null
     }
 
     // ---- Fundo de PDF: uma imagem da página inteira + um "recorte" nítido quando há zoom ----
@@ -399,6 +445,7 @@ class NoteCanvasView @JvmOverloads constructor(
         color = 0xFF3F51B5.toInt()
     }
     private val selectionFill = Paint().apply { color = 0x143F51B5 }
+    private val handleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
 
     private fun drawOverlay(canvas: Canvas) {
         if (!::notebook.isInitialized) return
@@ -435,17 +482,30 @@ class NoteCanvasView @JvmOverloads constructor(
         if (sel != null) {
             val idx = notebook.pages.indexOf(sel.page)
             if (idx >= 0) withPage(canvas, idx, clip = false) {
+                val b = sel.bounds
+                // itens selecionados, já com o "arrastar" e o "redimensionar" em andamento
                 canvas.save()
                 canvas.translate(dragDx, dragDy)
+                canvas.scale(dragScale, dragScale, b[0], b[1])
+                for (im in sel.images) ItemRenderer.drawImage(canvas, im, imageBitmap(im), bitmapPaint)
+                for (t in sel.texts) ItemRenderer.drawText(canvas, t)
                 StrokeRenderer.drawStrokes(canvas, sel.strokes, overlayPaint, pathCache)
-                val b = sel.bounds
+                canvas.restore()
+                // caixa tracejada + alça de redimensionar (canto inferior direito)
                 val pad = 6f / zoom * density
-                tileRect.set(b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad)
+                val l = b[0] + dragDx
+                val t = b[1] + dragDy
+                val r = b[0] + (b[2] - b[0]) * dragScale + dragDx
+                val btm = b[1] + (b[3] - b[1]) * dragScale + dragDy
+                tileRect.set(l - pad, t - pad, r + pad, btm + pad)
                 canvas.drawRect(tileRect, selectionFill)
                 lassoPaint.strokeWidth = 1.5f * density / zoom
                 lassoPaint.pathEffect = DashPathEffect(floatArrayOf(6f * density / zoom, 4f * density / zoom), 0f)
                 canvas.drawRect(tileRect, lassoPaint)
-                canvas.restore()
+                val hr = HANDLE_RADIUS_DP * density / zoom
+                canvas.drawCircle(r + pad, btm + pad, hr, handleFill)
+                lassoPaint.pathEffect = null
+                canvas.drawCircle(r + pad, btm + pad, hr, lassoPaint)
             }
         }
         // Cursor da borracha
@@ -471,7 +531,7 @@ class NoteCanvasView @JvmOverloads constructor(
     // Toque
     // ======================================================================
 
-    private enum class Mode { NONE, DRAW, ERASE, LASSO, MOVE_SELECTION, NAVIGATE, IGNORE }
+    private enum class Mode { NONE, DRAW, ERASE, LASSO, MOVE_SELECTION, RESIZE_SELECTION, TEXT_TAP, NAVIGATE, IGNORE }
 
     private var mode = Mode.NONE
     private var activeId = -1
@@ -588,7 +648,7 @@ class NoteCanvasView @JvmOverloads constructor(
         }
     }
 
-    private val drawingModes = setOf(Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION)
+    private val drawingModes = setOf(Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION, Mode.RESIZE_SELECTION, Mode.TEXT_TAP)
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(ev: MotionEvent): Boolean {
@@ -632,7 +692,7 @@ class NoteCanvasView @JvmOverloads constructor(
         when (mode) {
             Mode.IGNORE -> return
             Mode.NAVIGATE -> { navReset(ev, -1); navMaxPointers = max(navMaxPointers, fingerCount(ev, -1)); return }
-            Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION -> {
+            Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION, Mode.RESIZE_SELECTION, Mode.TEXT_TAP -> {
                 if (activeIsStylus) return // palma da mão encostando enquanto escreve
                 // Segundo dedo: era para rolar/dar zoom, não para desenhar.
                 val shortStroke = now - gestureDownTime < 300
@@ -648,12 +708,13 @@ class NoteCanvasView @JvmOverloads constructor(
             return
         }
         val sel = selection
-        if (sel != null && selectionHit(ev.getX(idx), ev.getY(idx))) {
+        if (sel != null && (handleHit(ev.getX(idx), ev.getY(idx)) || selectionHit(ev.getX(idx), ev.getY(idx)))) {
             activeId = ev.getPointerId(idx)
             activeIsStylus = false
             activeEraserTip = false
             gestureDownTime = now
-            startMoveSelection(ev.getX(idx), ev.getY(idx))
+            if (handleHit(ev.getX(idx), ev.getY(idx))) startResize(ev.getX(idx), ev.getY(idx))
+            else startMoveSelection(ev.getX(idx), ev.getY(idx))
             return
         }
         if (settings.fingerDraws && ev.pointerCount == 1) {
@@ -676,14 +737,24 @@ class NoteCanvasView @JvmOverloads constructor(
         when (kind) {
             ToolKind.PEN, ToolKind.HIGHLIGHTER -> startStroke(kind, sx, sy, pressure)
             ToolKind.ERASER -> startErase(sx, sy)
-            ToolKind.LASSO -> if (selection != null && selectionHit(sx, sy)) startMoveSelection(sx, sy) else startLasso(sx, sy)
+            ToolKind.LASSO -> when {
+                selection != null && handleHit(sx, sy) -> startResize(sx, sy)
+                selection != null && selectionHit(sx, sy) -> startMoveSelection(sx, sy)
+                else -> startLasso(sx, sy)
+            }
+            ToolKind.TEXT -> {
+                mode = Mode.TEXT_TAP
+                tapStartX = sx
+                tapStartY = sy
+                tapMoved = false
+            }
         }
     }
 
     private fun onMove(ev: MotionEvent) {
         when (mode) {
             Mode.NAVIGATE -> navMove(ev)
-            Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION -> {
+            Mode.DRAW, Mode.ERASE, Mode.LASSO, Mode.MOVE_SELECTION, Mode.RESIZE_SELECTION, Mode.TEXT_TAP -> {
                 val idx = ev.findPointerIndex(activeId)
                 if (idx < 0) return
                 if (activeIsStylus && updatePenButton(buttonPressed(ev))) {
@@ -728,6 +799,8 @@ class NoteCanvasView @JvmOverloads constructor(
             Mode.ERASE -> eraseTo(sx, sy)
             Mode.LASSO -> addLassoPoint(sx, sy)
             Mode.MOVE_SELECTION -> moveSelectionTo(sx, sy)
+            Mode.RESIZE_SELECTION -> resizeTo(sx, sy)
+            Mode.TEXT_TAP -> if (hypot(sx - tapStartX, sy - tapStartY) > touchSlop) tapMoved = true
             else -> Unit
         }
     }
@@ -738,6 +811,8 @@ class NoteCanvasView @JvmOverloads constructor(
             Mode.ERASE -> endErase()
             Mode.LASSO -> endLasso()
             Mode.MOVE_SELECTION -> endMoveSelection()
+            Mode.RESIZE_SELECTION -> endResize()
+            Mode.TEXT_TAP -> if (!tapMoved) { mode = Mode.NONE; handleTap(tapStartX, tapStartY) }
             else -> Unit
         }
         mode = Mode.NONE
@@ -745,10 +820,11 @@ class NoteCanvasView @JvmOverloads constructor(
 
     private fun cancelGesture() {
         when (mode) {
-            Mode.DRAW -> { livePoints.clear(); predicted.clear() }
+            Mode.DRAW -> { livePoints.clear(); predicted.clear(); removeCallbacks(holdRunnable) }
             Mode.ERASE -> endErase() // o que já foi apagado fica (dá para desfazer)
             Mode.LASSO -> lassoPoints.clear()
             Mode.MOVE_SELECTION -> { dragDx = 0f; dragDy = 0f }
+            Mode.RESIZE_SELECTION -> dragScale = 1f
             else -> Unit
         }
         mode = Mode.NONE
@@ -777,11 +853,55 @@ class NoteCanvasView @JvmOverloads constructor(
         livePoints.clear()
         predicted.clear()
         penBuilder.reset(liveWidth)
+        snapped = false
+        holdAnchorX = sx
+        holdAnchorY = sy
+        removeCallbacks(holdRunnable)
+        postDelayed(holdRunnable, SHAPE_HOLD_MS)
         addStrokePoint(sx, sy, pressure)
         overlay.invalidate()
     }
 
+    // Formas automáticas: segurar a caneta parada no fim do traço transforma o rabisco em forma.
+    private var snapped = false
+    private var holdAnchorX = 0f
+    private var holdAnchorY = 0f
+    private val holdRunnable = Runnable { if (mode == Mode.DRAW && !snapped && settings.holdForShape && trySnapShape()) performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK) }
+
+    private fun trySnapShape(): Boolean {
+        val n = livePoints.size / 3
+        if (n < 6) return false
+        val xy = FloatArray(n * 2)
+        var pSum = 0f
+        for (i in 0 until n) {
+            xy[i * 2] = livePoints[i * 3]
+            xy[i * 2 + 1] = livePoints[i * 3 + 1]
+            pSum += livePoints[i * 3 + 2]
+        }
+        val shape = ShapeRecognizer.recognize(xy) ?: return false
+        val pts = ShapeRecognizer.toStrokePoints(shape, pSum / n)
+        livePoints.clear()
+        penBuilder.reset(liveWidth)
+        var i = 0
+        while (i + 2 < pts.size) {
+            livePoints.add(pts[i], pts[i + 1], pts[i + 2])
+            if (liveTool == Tool.PEN) penBuilder.add(pts[i], pts[i + 1], pts[i + 2])
+            i += 3
+        }
+        predicted.clear()
+        snapped = true
+        overlay.invalidate()
+        return true
+    }
+
     private fun addStrokePoint(sx: Float, sy: Float, rawPressure: Float) {
+        if (snapped) return
+        if (hypot(sx - holdAnchorX, sy - holdAnchorY) > 3f * density) {
+            holdAnchorX = sx
+            holdAnchorY = sy
+            removeCallbacks(holdRunnable)
+            postDelayed(holdRunnable, SHAPE_HOLD_MS)
+        }
         val px = toDocX(sx) - pageLeft[livePage]
         val py = toDocY(sy) - pageTop[livePage]
         val n = livePoints.size
@@ -797,6 +917,7 @@ class NoteCanvasView @JvmOverloads constructor(
 
     private fun updatePrediction(idx: Int) {
         predicted.clear()
+        if (snapped) return
         val p = predictor.predict() ?: return
         try {
             val i = if (p.pointerCount > idx) idx else 0
@@ -815,7 +936,9 @@ class NoteCanvasView @JvmOverloads constructor(
     }
 
     private fun endStroke() {
+        removeCallbacks(holdRunnable)
         predicted.clear()
+        if (shapeMode && !snapped) trySnapShape()
         if (livePoints.size < 3 || livePage !in notebook.pages.indices) {
             livePoints.clear()
             return
@@ -903,10 +1026,35 @@ class NoteCanvasView @JvmOverloads constructor(
         if (!stylusHovering) setCursor(false)
     }
 
-    // ---------- Laço (selecionar, mover, apagar, recolorir) ----------
-    private class Selection(val page: Page, val strokes: List<Stroke>) {
-        val set: Set<Stroke> = java.util.Collections.newSetFromMap(IdentityHashMap<Stroke, Boolean>()).apply { addAll(strokes) }
-        val bounds: FloatArray = Geometry.unionBounds(strokes)!!
+    // ---------- Laço (selecionar, mover, redimensionar, apagar, recolorir) ----------
+    private class Selection(
+        val page: Page,
+        val strokes: List<Stroke>,
+        val texts: List<TextBox> = emptyList(),
+        val images: List<ImageItem> = emptyList(),
+    ) {
+        val set: Set<Stroke> = identitySet(strokes)
+        val textSet: Set<TextBox> = identitySet(texts)
+        val imageSet: Set<ImageItem> = identitySet(images)
+        val bounds: FloatArray = run {
+            val all = ArrayList<FloatArray>()
+            Geometry.unionBounds(strokes)?.let { all.add(it) }
+            texts.forEach { all.add(ItemRenderer.textBounds(it)) }
+            images.forEach { all.add(ItemRenderer.imageBounds(it)) }
+            floatArrayOf(
+                all.minOf { it[0] }, all.minOf { it[1] }, all.maxOf { it[2] }, all.maxOf { it[3] },
+            )
+        }
+        val isEmpty get() = strokes.isEmpty() && texts.isEmpty() && images.isEmpty()
+
+        companion object {
+            fun <T> identitySet(items: List<T>): Set<T> =
+                java.util.Collections.newSetFromMap(IdentityHashMap<T, Boolean>()).apply { addAll(items) }
+
+            fun of(page: Page, strokes: List<Stroke>, texts: List<TextBox>, images: List<ImageItem>): Selection? =
+                if (strokes.isEmpty() && texts.isEmpty() && images.isEmpty()) null
+                else Selection(page, strokes, texts, images)
+        }
     }
 
     private var selection: Selection? = null
@@ -916,18 +1064,35 @@ class NoteCanvasView @JvmOverloads constructor(
     private var dragStartY = 0f
     private var dragDx = 0f
     private var dragDy = 0f
+    private var dragScale = 1f
+    private var tapStartX = 0f
+    private var tapStartY = 0f
+    private var tapMoved = false
 
     val hasSelection get() = selection != null
 
+    private fun selectionPageIndex(): Int = selection?.let { notebook.pages.indexOf(it.page) } ?: -1
+
     private fun selectionHit(sx: Float, sy: Float): Boolean {
         val sel = selection ?: return false
-        val idx = notebook.pages.indexOf(sel.page)
+        val idx = selectionPageIndex()
         if (idx < 0) return false
         val px = toDocX(sx) - pageLeft[idx]
         val py = toDocY(sy) - pageTop[idx]
         val pad = 14f * density / zoom
         val b = sel.bounds
         return px >= b[0] - pad && px <= b[2] + pad && py >= b[1] - pad && py <= b[3] + pad
+    }
+
+    /** Toque na bolinha do canto da seleção (para aumentar/diminuir). */
+    private fun handleHit(sx: Float, sy: Float): Boolean {
+        val sel = selection ?: return false
+        val idx = selectionPageIndex()
+        if (idx < 0) return false
+        val pad = 6f / zoom * density
+        val hx = offX + (pageLeft[idx] + sel.bounds[2] + pad) * zoom
+        val hy = offY + (pageTop[idx] + sel.bounds[3] + pad) * zoom
+        return hypot(sx - hx, sy - hy) < (HANDLE_RADIUS_DP + 14f) * density
     }
 
     private fun startLasso(sx: Float, sy: Float) {
@@ -954,13 +1119,67 @@ class NoteCanvasView @JvmOverloads constructor(
     private fun endLasso() {
         val poly = lassoPoints.toArray()
         lassoPoints.clear()
-        if (lassoPage !in notebook.pages.indices || poly.size < 6) {
+        if (lassoPage !in notebook.pages.indices) {
+            overlay.invalidate()
+            return
+        }
+        // Laço minúsculo = foi só um toque: seleciona o que estiver embaixo do dedo/caneta.
+        var len = 0f
+        for (i in 1 until poly.size / 2) len += hypot(poly[i * 2] - poly[i * 2 - 2], poly[i * 2 + 1] - poly[i * 2 - 1])
+        if (len * zoom < 10f * density) {
+            if (poly.size >= 2) selectAt(lassoPage, poly[0], poly[1])
+            overlay.invalidate()
+            return
+        }
+        if (poly.size < 6) {
             overlay.invalidate()
             return
         }
         val page = notebook.pages[lassoPage]
-        val chosen = page.strokes.filter { Geometry.strokeInLasso(it, poly) }
-        setSelection(if (chosen.isEmpty()) null else Selection(page, chosen))
+        val strokes = page.strokes.filter { Geometry.strokeInLasso(it, poly) }
+        val texts = page.texts.filter { centerIn(ItemRenderer.textBounds(it), poly) }
+        val images = page.images.filter { centerIn(ItemRenderer.imageBounds(it), poly) }
+        setSelection(Selection.of(page, strokes, texts, images))
+    }
+
+    private fun centerIn(b: FloatArray, poly: FloatArray) =
+        Geometry.pointInPolygon((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, poly)
+
+    /** Seleciona o item no ponto (coordenadas da página): texto, imagem ou traço. */
+    private fun selectAt(pageIndex: Int, px: Float, py: Float): Boolean {
+        val page = notebook.pages[pageIndex]
+        page.texts.lastOrNull { inside(ItemRenderer.textBounds(it), px, py) }?.let {
+            setSelection(Selection(page, emptyList(), listOf(it)))
+            return true
+        }
+        val r = 8f * density / zoom
+        page.strokes.lastOrNull { Geometry.strokeTouches(it, px, py, px, py, r) }?.let {
+            setSelection(Selection(page, listOf(it)))
+            return true
+        }
+        page.images.lastOrNull { inside(ItemRenderer.imageBounds(it), px, py) }?.let {
+            setSelection(Selection(page, emptyList(), images = listOf(it)))
+            return true
+        }
+        clearSelection()
+        return false
+    }
+
+    private fun inside(b: FloatArray, x: Float, y: Float) = x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]
+
+    /** Toque simples com a ferramenta Texto (criar/editar) ou Laço (selecionar). */
+    private fun handleTap(sx: Float, sy: Float) {
+        val pi = pageAtDoc(toDocX(sx), toDocY(sy))
+        if (pi < 0) return
+        val px = toDocX(sx) - pageLeft[pi]
+        val py = toDocY(sy) - pageTop[pi]
+        if (tool == ToolKind.LASSO) {
+            selectAt(pi, px, py)
+            return
+        }
+        val page = notebook.pages[pi]
+        val existing = page.texts.lastOrNull { inside(ItemRenderer.textBounds(it), px, py) }
+        listener?.onTextRequest(pi, px, py, existing)
     }
 
     private fun setSelection(sel: Selection?) {
@@ -968,6 +1187,7 @@ class NoteCanvasView @JvmOverloads constructor(
         selection = sel
         dragDx = 0f
         dragDy = 0f
+        dragScale = 1f
         content.invalidate()
         overlay.invalidate()
         if (had || sel != null) listener?.onSelectionChanged(sel != null)
@@ -999,37 +1219,123 @@ class NoteCanvasView @JvmOverloads constructor(
             overlay.invalidate()
             return
         }
-        changeSelection { it.translated(dx, dy) }
+        changeSelection({ it.translated(dx, dy) }, { it.translated(dx, dy) }, { it.translated(dx, dy) })
     }
 
-    /** Troca cada traço selecionado por [transform] (ou remove, se devolver null). */
-    private fun changeSelection(transform: (Stroke) -> Stroke?) {
+    private fun startResize(sx: Float, sy: Float) {
+        mode = Mode.RESIZE_SELECTION
+        dragScale = 1f
+        dragStartX = toDocX(sx)
+        dragStartY = toDocY(sy)
+    }
+
+    private fun resizeTo(sx: Float, sy: Float) {
+        val sel = selection ?: return
+        val idx = selectionPageIndex()
+        if (idx < 0) return
+        val b = sel.bounds
+        val ox = pageLeft[idx] + b[0]
+        val oy = pageTop[idx] + b[1]
+        val start = hypot(dragStartX - ox, dragStartY - oy)
+        val now = hypot(toDocX(sx) - ox, toDocY(sy) - oy)
+        if (start > 1f) dragScale = (now / start).coerceIn(0.1f, 10f)
+    }
+
+    private fun endResize() {
+        val s = dragScale
+        dragScale = 1f
+        val sel = selection ?: return
+        if (abs(s - 1f) < 0.01f) {
+            overlay.invalidate()
+            return
+        }
+        val ox = sel.bounds[0]
+        val oy = sel.bounds[1]
+        changeSelection({ it.scaled(ox, oy, s) }, { it.scaled(ox, oy, s) }, { it.scaled(ox, oy, s) })
+    }
+
+    /** Troca cada item selecionado pelo resultado da transformação (null = remover). */
+    private fun changeSelection(
+        strokeFn: (Stroke) -> Stroke?,
+        textFn: (TextBox) -> TextBox?,
+        imageFn: (ImageItem) -> ImageItem?,
+    ) {
         val sel = selection ?: return
         val page = sel.page
-        val before = page.strokes
-        val newSel = ArrayList<Stroke>()
-        val after = before.mapNotNull { s ->
-            if (sel.set.contains(s)) transform(s)?.also { newSel.add(it) } else s
-        }
-        page.strokes = after
-        pushEdit(StrokesEdit(page, before, after))
-        setSelection(if (newSel.isEmpty()) null else Selection(page, newSel))
+        val before = page.content
+        val newStrokes = ArrayList<Stroke>()
+        val newTexts = ArrayList<TextBox>()
+        val newImages = ArrayList<ImageItem>()
+        val after = PageContent(
+            before.strokes.mapNotNull { s -> if (sel.set.contains(s)) strokeFn(s)?.also { newStrokes.add(it) } else s },
+            before.texts.mapNotNull { t -> if (sel.textSet.contains(t)) textFn(t)?.also { newTexts.add(it) } else t },
+            before.images.mapNotNull { i -> if (sel.imageSet.contains(i)) imageFn(i)?.also { newImages.add(it) } else i },
+        )
+        page.content = after
+        pushEdit(ContentEdit(page, before, after))
+        setSelection(Selection.of(page, newStrokes, newTexts, newImages))
     }
 
-    fun deleteSelection() = changeSelection { null }
+    fun deleteSelection() = changeSelection({ null }, { null }, { null })
 
-    fun recolorSelection(color: Int) = changeSelection { it.withColor(color) }
+    fun recolorSelection(color: Int) =
+        changeSelection({ it.withColor(color) }, { it.copy(color = color) }, { it })
 
     fun duplicateSelection() {
         val sel = selection ?: return
         val page = sel.page
-        val copies = sel.strokes.map { it.translated(20f, 20f) }
-        val before = page.strokes
-        val after = before + copies
-        page.strokes = after
-        pushEdit(StrokesEdit(page, before, after))
-        setSelection(Selection(page, copies))
+        val strokes = sel.strokes.map { it.translated(20f, 20f) }
+        val texts = sel.texts.map { it.translated(20f, 20f).copy(id = NotebookStore.newId()) }
+        val images = sel.images.map { it.translated(20f, 20f).copy(id = NotebookStore.newId()) }
+        val before = page.content
+        val after = PageContent(before.strokes + strokes, before.texts + texts, before.images + images)
+        page.content = after
+        pushEdit(ContentEdit(page, before, after))
+        setSelection(Selection.of(page, strokes, texts, images))
     }
+
+    // ---------- Texto e imagens ----------
+
+    /** Cria ([old] == null), altera ou (texto vazio) apaga uma caixa de texto. */
+    fun putText(pageIndex: Int, old: TextBox?, new: TextBox?) {
+        val page = notebook.pages.getOrNull(pageIndex) ?: return
+        clearSelection()
+        val before = page.content
+        val texts = before.texts.toMutableList()
+        val at = if (old != null) texts.indexOfFirst { it === old } else -1
+        when {
+            new == null && at >= 0 -> texts.removeAt(at)
+            new != null && at >= 0 -> texts[at] = new
+            new != null -> texts.add(new)
+            else -> return
+        }
+        val after = before.copy(texts = texts)
+        page.content = after
+        pushEdit(ContentEdit(page, before, after))
+        content.invalidate()
+    }
+
+    /** Cola uma imagem no meio da parte visível da página atual e já a deixa selecionada. */
+    fun insertImage(file: String, imgW: Int, imgH: Int) {
+        val pi = currentPageIndex
+        val page = notebook.pages.getOrNull(pi) ?: return
+        val w = page.width * 0.6f
+        val h = w * imgH / max(1, imgW)
+        val viewCx = toDocX(width / 2f) - pageLeft[pi]
+        val viewCy = toDocY(height / 2f) - pageTop[pi]
+        val x = (viewCx - w / 2).coerceIn(0f, max(0f, page.width - w))
+        val y = (viewCy - h / 2).coerceIn(0f, max(0f, page.height - h))
+        val item = ImageItem(NotebookStore.newId(), x, y, w, h, file)
+        val before = page.content
+        val after = before.copy(images = before.images + item)
+        page.content = after
+        pushEdit(ContentEdit(page, before, after))
+        tool = ToolKind.LASSO
+        setSelection(Selection(page, emptyList(), images = listOf(item)))
+    }
+
+    /** Nomes dos arquivos de imagem usados em alguma página (para limpar os que sobraram). */
+    fun usedImageFiles(): Set<String> = notebook.pages.flatMap { p -> p.images.map { it.file } }.toSet()
 
     // ---------- Navegação com os dedos (rolar, pinça, toque com 2/3 dedos) ----------
     private var navLastX = 0f
@@ -1114,7 +1420,9 @@ class NoteCanvasView @JvmOverloads constructor(
     private fun endNavigation(fling: Boolean) {
         val now = SystemClock.uptimeMillis()
         val tap = navTravel < touchSlop * 2 && now - navStartTime < 300
-        if (fling && tap && navMaxPointers >= 2 && settings.tapGestures) {
+        if (fling && tap && navMaxPointers == 1 && (tool == ToolKind.TEXT || tool == ToolKind.LASSO)) {
+            handleTap(navLastX, navLastY)
+        } else if (fling && tap && navMaxPointers >= 2 && settings.tapGestures) {
             if (navMaxPointers == 2) undo() else redo()
         } else if (fling && navMaxPointers == 1) {
             velocity?.let { vt ->
@@ -1232,6 +1540,7 @@ class NoteCanvasView @JvmOverloads constructor(
         super.onDetachedFromWindow()
         stopFling()
         removeCallbacks(detailRunnable)
+        removeCallbacks(holdRunnable)
         velocity?.recycle()
         velocity = null
     }
@@ -1241,6 +1550,8 @@ class NoteCanvasView @JvmOverloads constructor(
         private const val GAP = 18f
         private const val MAX_BASE_PX = 1800f
         private const val PALM_GUARD_MS = 400L
+        private const val HANDLE_RADIUS_DP = 9f
+        private const val SHAPE_HOLD_MS = 550L
 
         // Algumas canetas Samsung mandam estas ações quando o botão lateral está apertado.
         private const val SAMSUNG_SPEN_DOWN = 211

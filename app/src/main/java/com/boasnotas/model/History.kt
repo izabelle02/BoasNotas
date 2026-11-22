@@ -13,6 +13,12 @@ class StrokesEdit(val page: Page, private val before: List<Stroke>, private val 
     override fun redo() { page.strokes = after }
 }
 
+/** Troca o conteúdo inteiro da página (traços, textos e imagens) — usado pelo laço, texto e imagens. */
+class ContentEdit(val page: Page, private val before: PageContent, private val after: PageContent) : Edit {
+    override fun undo() { page.content = before }
+    override fun redo() { page.content = after }
+}
+
 class TemplateEdit(val page: Page, private val before: PaperTemplate, private val after: PaperTemplate) : Edit {
     override fun undo() { page.template = before }
     override fun redo() { page.template = after }
