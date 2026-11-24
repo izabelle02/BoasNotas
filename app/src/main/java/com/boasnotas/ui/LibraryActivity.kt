@@ -25,6 +25,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.boasnotas.BoasNotasApp
 import com.boasnotas.R
 import com.boasnotas.data.AppSettings
 import com.boasnotas.data.DriveSync
@@ -85,6 +86,7 @@ class LibraryActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnSearch).setOnClickListener { startActivity(Intent(this, SearchActivity::class.java)) }
         findViewById<View>(R.id.btnDrive).setOnClickListener { driveDialog() }
         HandwritingIndex.prepare(this)
+        showLastCrash()
 
         if (savedInstanceState == null) handleIncomingPdf(intent)
     }
@@ -215,6 +217,32 @@ class LibraryActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Se o app fechou por erro da última vez, mostra o erro para poder copiar e enviar. */
+    private fun showLastCrash() {
+        val f = BoasNotasApp.crashFile(application)
+        if (!f.exists()) return
+        val text = runCatching { f.readText() }.getOrDefault("")
+        f.delete()
+        if (text.isBlank()) return
+        val view = TextView(this).apply {
+            this.text = text
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(dpi(22), dpi(8), dpi(22), dpi(8))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("O app fechou por um erro")
+            .setMessage("Desculpe! Copie a mensagem abaixo e mande para quem cuida do app, assim dá para corrigir.")
+            .setView(android.widget.ScrollView(this).apply { addView(view) })
+            .setPositiveButton("Copiar") { _, _ ->
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Erro do BoasNotas", text))
+                Toast.makeText(this, "Copiado", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
     }
 
     // ---------------- Google Drive ----------------

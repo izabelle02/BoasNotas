@@ -45,6 +45,18 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all { test ->
+                test.testLogging {
+                    events("passed", "failed")
+                    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    showStackTraces = true
+                }
+            }
+        }
+    }
 }
 
 dependencies {
@@ -65,4 +77,8 @@ dependencies {
     implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Android "simulado" para testar as telas sem um aparelho
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
 }
