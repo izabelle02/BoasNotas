@@ -270,7 +270,7 @@ class EditorActivity : AppCompatActivity(), NoteCanvasView.Listener {
         pageIndicator.text = "${index + 1} / $count"
     }
 
-    override fun onContentChanged() {
+    override fun onNotebookEdited() {
         dirty = true
         needsSync = true
         thumbDirty = true

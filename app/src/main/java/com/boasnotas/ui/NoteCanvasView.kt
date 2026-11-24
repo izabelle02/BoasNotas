@@ -72,7 +72,7 @@ class NoteCanvasView @JvmOverloads constructor(
 
     interface Listener {
         fun onCurrentPageChanged(index: Int, count: Int)
-        fun onContentChanged()
+        fun onNotebookEdited()
         fun onHistoryChanged()
         /** O botão da caneta trocou a ferramenta (modo "alternar"). */
         fun onToolChangedByPen(tool: ToolKind)
@@ -1497,7 +1497,7 @@ class NoteCanvasView @JvmOverloads constructor(
     private fun pushEdit(e: Edit) {
         history.push(e)
         listener?.onHistoryChanged()
-        listener?.onContentChanged()
+        listener?.onNotebookEdited()
     }
 
     fun undo() {
@@ -1518,7 +1518,7 @@ class NoteCanvasView @JvmOverloads constructor(
         if (e.changesPages) relayout()
         content.invalidate()
         listener?.onHistoryChanged()
-        listener?.onContentChanged()
+        listener?.onNotebookEdited()
     }
 
     fun addPage(afterIndex: Int, template: PaperTemplate): Int {
