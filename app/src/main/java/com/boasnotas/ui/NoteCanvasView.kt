@@ -546,7 +546,22 @@ class NoteCanvasView @JvmOverloads constructor(
     private var cursorX = 0f
     private var cursorY = 0f
 
-    private val predictor: MotionEventPredictor = MotionEventPredictor.newInstance(this)
+    // Previsão do movimento da caneta: criada só no primeiro uso (com a tela já pronta).
+    // Se o aparelho não suportar, o app segue sem ela em vez de fechar.
+    private var predictor: MotionEventPredictor? = null
+    private var predictorFailed = false
+
+    private fun predictorOrNull(): MotionEventPredictor? {
+        if (predictor == null && !predictorFailed && isAttachedToWindow) {
+            predictor = try {
+                MotionEventPredictor.newInstance(this)
+            } catch (e: Throwable) {
+                predictorFailed = true
+                null
+            }
+        }
+        return predictor
+    }
     private val predicted = FloatList(64)
 
     private fun isStylus(ev: MotionEvent, idx: Int): Boolean {
@@ -657,7 +672,12 @@ class NoteCanvasView @JvmOverloads constructor(
         val stylusEvent = ev.pointerCount > 0 && isStylus(ev, ev.actionIndex.coerceIn(0, ev.pointerCount - 1))
         if (stylusEvent) {
             lastStylusTime = SystemClock.uptimeMillis()
-            if (ev.pointerCount == 1 && ev.actionMasked !in SAMSUNG_SPEN_ACTIONS) predictor.record(ev)
+            if (ev.pointerCount == 1 && ev.actionMasked !in SAMSUNG_SPEN_ACTIONS) try {
+                predictorOrNull()?.record(ev)
+            } catch (e: Throwable) {
+                predictorFailed = true
+                predictor = null
+            }
         }
         when (action) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
@@ -918,7 +938,13 @@ class NoteCanvasView @JvmOverloads constructor(
     private fun updatePrediction(idx: Int) {
         predicted.clear()
         if (snapped) return
-        val p = predictor.predict() ?: return
+        val p = try {
+            predictorOrNull()?.predict()
+        } catch (e: Throwable) {
+            predictorFailed = true
+            predictor = null
+            null
+        } ?: return
         try {
             val i = if (p.pointerCount > idx) idx else 0
             val pressure = if (settings.pressureEnabled) p.getPressure(i).coerceIn(0f, 1f) else 0.5f
